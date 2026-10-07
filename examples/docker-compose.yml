@@ -2,7 +2,7 @@ version: '2.4'
 services:
 
   backuppc-app:
-    image: tiredofit/backuppc
+    image: ghcr.io/ads102003/docker-backuppc:latest
     container_name: backuppc-app
     labels:
       - traefik.enable=true

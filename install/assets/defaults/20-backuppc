@@ -1,7 +1,0 @@
-#!/command/with-contenv bash
-
-BACKUPPC_ADMIN_USER=${BACKUPPC_ADMIN_USER:-"backuppc"}
-CONFIG_PATH=${CONFIG_PATH:-"/etc/backuppc/"}
-DATA_PATH=${DATA_PATH:-"/var/lib/backuppc/"}
-LOG_PATH=${LOG_PATH:-"/www/logs/"}
-SSH_KEYS_PATH=${SSH_KEYS_PATH:-"/home/backuppc/.ssh"}
