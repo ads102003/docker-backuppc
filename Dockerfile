@@ -1,65 +1,53 @@
-ARG DISTRO="alpine"
-ARG DISTRO_VARIANT="3.19"
+ARG ALPINE_VERSION="3.19"
 
-FROM docker.io/tiredofit/nginx:${DISTRO}-${DISTRO_VARIANT}
-LABEL maintainer="Dave Conroy (github.com/tiredofit)"
+FROM docker.io/library/alpine:${ALPINE_VERSION}
 
-ARG BACKUPPC_VERSION
-ARG BACKUPPC_XS_VERSION
-ARG PAR2_VERSION
-ARG RSYNC_BPC_VERSION
+LABEL org.opencontainers.image.title="BackupPC" \
+      org.opencontainers.image.description="BackupPC on Alpine with nginx + fcgiwrap" \
+      org.opencontainers.image.licenses="MIT"
 
-ENV BACKUPPC_VERSION=${BACKUPPC_VERSION:-"4.4.0"} \
-    BACKUPPC_XS_VERSION=${BACKUPPC_XS_VERSION:-"0.62"} \
-    PAR2_VERSION=${PAR2_VERSION:-"v0.8.0"} \
-    RSYNC_BPC_VERSION=${RSYNC_BPC_VERSION:-"3.1.3.0"} \
-    CONTAINER_ENABLE_PERMISSIONS=TRUE \
+ARG BACKUPPC_VERSION="4.4.0"
+ARG BACKUPPC_XS_VERSION="0.62"
+ARG PAR2_VERSION="v0.8.0"
+ARG RSYNC_BPC_VERSION="3.1.3.0"
+ARG PBZIP2_VERSION="1.1.13"
+
+ENV BACKUPPC_VERSION=${BACKUPPC_VERSION} \
     USER_BACKUPPC=1000 \
     GROUP_BACKUPPC=1000 \
-    NGINX_ENABLE_CREATE_SAMPLE_HTML=FALSE \
-    NGINX_LISTEN_PORT=80 \
-    NGINX_USER=backuppc \
-    NGINX_GROUP=backuppc \
-    NGINX_SITE_ENABLED=backuppc \
-    CONTAINER_ENABLE_MESSAGING=TRUE \
-    IMAGE_NAME="tiredofit/backuppc" \
-    IMAGE_REPO_URL="https://github.com/tiredofit/docker-backuppc/"
+    CONFIG_PATH=/etc/backuppc \
+    DATA_PATH=/var/lib/backuppc \
+    LOG_PATH=/www/logs \
+    SSH_KEYS_PATH=/home/backuppc/.ssh
 
-RUN source /assets/functions/00-container && \
-    set -x && \
-    addgroup -S -g ${GROUP_BACKUPPC} backuppc && \
-    adduser -D \
-            -S \
-            -h /home/backuppc \
-            -s /sbin/nologin -G backuppc -g "backuppc" -u ${USER_BACKUPPC} backuppc \
-             && \
-    addgroup zabbix backuppc && \
-    package update && \
-    package upgrade && \
-    package install .backuppc-build-deps \
+COPY patches/ /tmp/patches/
+
+RUN set -ex && \
+    apk upgrade --no-cache && \
+    apk add --no-cache --virtual .backuppc-build-deps \
+                acl-dev \
                 autoconf \
                 automake \
-                acl-dev \
                 build-base \
                 bzip2-dev \
+                curl \
                 expat-dev \
-                g++ \
-                gcc \
                 git \
-                make \
                 patch \
-                perl-dev \
                 perl-app-cpanminus \
+                perl-dev \
                 && \
-    \
-    package install .backuppc-run-deps \
+    apk add --no-cache \
+                bash \
                 bzip2 \
+                ca-certificates \
                 expat \
-                gzip \
                 fcgiwrap \
+                gzip \
                 iputils \
                 libgomp \
-                openssh \
+                nginx \
+                openssh-client \
                 openssl \
                 perl \
                 perl-archive-zip \
@@ -72,51 +60,58 @@ RUN source /assets/functions/00-container && \
                 rrdtool \
                 rsync \
                 samba-client \
+                shadow \
                 spawn-fcgi \
-                sudo \
+                su-exec \
+                tini \
                 ttf-dejavu \
+                tzdata \
                 && \
     \
-    cpanm -M https://cpan.metacpan.org install \
-            Net::FTP \
-            Net::FTP::AutoReconnect \
-            && \
+    addgroup -S -g ${GROUP_BACKUPPC} backuppc && \
+    adduser -D -S -h /home/backuppc -s /bin/sh -G backuppc -g backuppc -u ${USER_BACKUPPC} backuppc && \
+    addgroup nginx backuppc && \
+    \
+    cpanm --notest -M https://cpan.metacpan.org Net::FTP Net::FTP::AutoReconnect && \
     \
     mkdir -p /usr/src/pbzip2 && \
-    curl -ssL https://launchpad.net/pbzip2/1.1/1.1.13/+download/pbzip2-1.1.13.tar.gz | tar xvfz - --strip=1 -C /usr/src/pbzip2 && \
-    cd /usr/src/pbzip2 && \
-    make -j$(nproc)&& \
-    make install && \
+    curl -fsSL https://launchpad.net/pbzip2/1.1/${PBZIP2_VERSION}/+download/pbzip2-${PBZIP2_VERSION}.tar.gz | tar xzf - --strip-components=1 -C /usr/src/pbzip2 && \
+    make -C /usr/src/pbzip2 -j$(nproc) && \
+    make -C /usr/src/pbzip2 install && \
     \
-    clone_git_repo https://github.com/backuppc/backuppc-xs.git ${BACKUPPC_XS_VERSION} && \
+    git clone --depth 1 --branch ${BACKUPPC_XS_VERSION} https://github.com/backuppc/backuppc-xs.git /usr/src/backuppc-xs && \
+    cd /usr/src/backuppc-xs && \
     perl Makefile.PL && \
-    make -j$(nproc)&& \
+    make -j$(nproc) && \
     make test && \
     make install && \
     \
-    clone_git_repo https://github.com/backuppc/rsync-bpc.git ${RSYNC_BPC_VERSION} && \
+    git clone --depth 1 --branch ${RSYNC_BPC_VERSION} https://github.com/backuppc/rsync-bpc.git /usr/src/rsync-bpc && \
+    cd /usr/src/rsync-bpc && \
     ./configure && \
     make reconfigure && \
-    make -j$(nproc)&& \
+    make -j$(nproc) && \
     make install && \
     \
-    clone_git_repo https://github.com/Parchive/par2cmdline.git ${PAR2_VERSION} && \
+    git clone --depth 1 --branch ${PAR2_VERSION} https://github.com/Parchive/par2cmdline.git /usr/src/par2cmdline && \
+    cd /usr/src/par2cmdline && \
     ./automake.sh && \
     ./configure && \
-    make -j$(nproc)&& \
-    make check && \
+    make -j$(nproc) && \
     make install && \
     \
     mkdir -p /assets/install && \
-    curl -sSL https://github.com/backuppc/backuppc/releases/download/$BACKUPPC_VERSION/BackupPC-$BACKUPPC_VERSION.tar.gz | tar xvfz - --strip 1 -C /assets/install && \
-    \
-    curl -sSL https://github.com/backuppc/backuppc/commit/2c9270b9b849b2c86ae6301dd722c97757bc9256.patch -o /assets/install/patchfile.patch && \
+    curl -fsSL https://github.com/backuppc/backuppc/releases/download/${BACKUPPC_VERSION}/BackupPC-${BACKUPPC_VERSION}.tar.gz | tar xzf - --strip-components=1 -C /assets/install && \
     cd /assets/install && \
-    patch -p1 < patchfile.patch && \
-    package remove .backuppc-build-deps && \
-    package cleanup && \
-    rm -rf /root/.cpanm \
-           /tmp/* \
-           /usr/src/*
+    for p in /tmp/patches/*.patch; do patch -p1 < "$p" || exit 1; done && \
+    \
+    apk del .backuppc-build-deps && \
+    rm -rf /root/.cpanm /tmp/* /usr/src/* /etc/nginx/http.d/default.conf
 
 COPY install/ /
+
+EXPOSE 80
+
+VOLUME ["/etc/backuppc", "/home/backuppc", "/var/lib/backuppc", "/www/logs"]
+
+ENTRYPOINT ["/sbin/tini", "--", "/usr/local/bin/docker-entrypoint.sh"]
