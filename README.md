@@ -46,19 +46,15 @@ The following directories are used for configuration and can be mapped for persi
 | ---------------------------------- | -------------------------------------------------------- | --------------------- |
 | `USER_BACKUPPC`                    | uid for the backuppc user - set to the owner of old data | `1000`                |
 | `GROUP_BACKUPPC`                   | gid for the backuppc user - set to the owner of old data | `1000`                |
-| `CONFIG_PATH`                      | BackupPC configuration files                             | `/etc/backuppc`       |
-| `DATA_PATH`                        | BackupPC data (pool)                                     | `/var/lib/backuppc`   |
-| `LOG_PATH`                         | Logfiles for BackupPC and nginx                          | `/www/logs`           |
-| `SSH_KEYS_PATH`                    | SSH keys                                                 | `/home/backuppc/.ssh` |
 | `NGINX_AUTHENTICATION_TYPE`        | Set to `BASIC` to password-protect the web UI            | `NONE`                |
 | `NGINX_AUTHENTICATION_TITLE`       | Basic auth realm                                         | `Please login`        |
 | `NGINX_AUTHENTICATION_BASIC_USER1` | Basic auth username (increment for more users)           |                       |
 | `NGINX_AUTHENTICATION_BASIC_PASS1` | Basic auth password (increment for more users)           |                       |
 
-On every start the container runs BackupPC's `configure.pl --batch`, which creates a default config when
-`/etc/backuppc` is empty or upgrades an existing one in place. Only the top level of the data directory is
-`chown`ed, so make sure `USER_BACKUPPC`/`GROUP_BACKUPPC` match the uid/gid that owns your existing pool
-(`ls -ln /path/to/data`).
+BackupPC is installed when the image is built, so the paths above are fixed. On start the container writes a
+default config only when `/etc/backuppc` has no `config.pl`; an existing config is never modified, and the
+volumes may be mounted read-only. Only the top level of the data directory is `chown`ed, so make sure
+`USER_BACKUPPC`/`GROUP_BACKUPPC` match the uid/gid that owns your existing pool (`ls -ln /path/to/data`).
 
 The upstream image's zabbix monitoring, SMTP (msmtp) and LDAP/LLNG auth options are not included.
 

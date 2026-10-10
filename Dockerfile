@@ -14,11 +14,7 @@ ARG PBZIP2_VERSION="1.1.13"
 
 ENV BACKUPPC_VERSION=${BACKUPPC_VERSION} \
     USER_BACKUPPC=1000 \
-    GROUP_BACKUPPC=1000 \
-    CONFIG_PATH=/etc/backuppc \
-    DATA_PATH=/var/lib/backuppc \
-    LOG_PATH=/www/logs \
-    SSH_KEYS_PATH=/home/backuppc/.ssh
+    GROUP_BACKUPPC=1000
 
 COPY patches/ /tmp/patches/
 
@@ -104,6 +100,23 @@ RUN set -ex && \
     curl -fsSL https://github.com/backuppc/backuppc/releases/download/${BACKUPPC_VERSION}/BackupPC-${BACKUPPC_VERSION}.tar.gz | tar xzf - --strip-components=1 -C /assets/install && \
     cd /assets/install && \
     for p in /tmp/patches/*.patch; do patch -p1 < "$p" || exit 1; done && \
+    perl configure.pl \
+        --batch \
+        --backuppc-user backuppc \
+        --config-dir /etc/backuppc \
+        --cgi-dir /www/cgi-bin/BackupPC \
+        --data-dir /var/lib/backuppc \
+        --hostname localhost \
+        --html-dir /www/html/BackupPC \
+        --html-dir-url /BackupPC \
+        --install-dir /usr/local/BackupPC \
+        --log-dir /www/logs \
+        && \
+    mkdir -p /assets/conf-default && \
+    mv /etc/backuppc/* /assets/conf-default/ && \
+    sed -i "s/^\$Conf{CgiAdminUsers}\s*=.*/\$Conf{CgiAdminUsers} = 'backuppc';/" /assets/conf-default/config.pl && \
+    cd / && \
+    rm -rf /assets/install && \
     \
     apk del .backuppc-build-deps && \
     rm -rf /root/.cpanm /tmp/* /usr/src/* /etc/nginx/http.d/default.conf
