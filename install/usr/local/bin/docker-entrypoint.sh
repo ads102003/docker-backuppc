@@ -1,14 +1,16 @@
 #!/bin/bash
 set -euo pipefail
 
-CONFIG_PATH=${CONFIG_PATH:-/etc/backuppc}
-DATA_PATH=${DATA_PATH:-/var/lib/backuppc}
-LOG_PATH=${LOG_PATH:-/www/logs}
-SSH_KEYS_PATH=${SSH_KEYS_PATH:-/home/backuppc/.ssh}
+# These paths are baked into the BackupPC install at image build time
+CONFIG_PATH=/etc/backuppc
+DATA_PATH=/var/lib/backuppc
+LOG_PATH=/www/logs
+SSH_KEYS_PATH=/home/backuppc/.ssh
 USER_BACKUPPC=${USER_BACKUPPC:-1000}
 GROUP_BACKUPPC=${GROUP_BACKUPPC:-1000}
 
 log() { echo "[backuppc] $*"; }
+warn() { echo "[backuppc] WARNING: $*" >&2; }
 
 # Match the backuppc uid/gid to the owner of existing data so old pools stay readable
 if [ "$(id -g backuppc)" != "${GROUP_BACKUPPC}" ]; then
@@ -20,46 +22,44 @@ if [ "$(id -u backuppc)" != "${USER_BACKUPPC}" ]; then
     usermod -o -u "${USER_BACKUPPC}" backuppc
 fi
 
-mkdir -p "${CONFIG_PATH}" "${DATA_PATH}" "${LOG_PATH}" "${SSH_KEYS_PATH}" /home/backuppc /run/nginx
-# Only chown top-level directories; recursively chowning a large pool would take forever
-chown backuppc:backuppc /home/backuppc "${DATA_PATH}" "${LOG_PATH}"
-chown -R backuppc:backuppc "${CONFIG_PATH}" "${SSH_KEYS_PATH}"
-chmod 700 "${SSH_KEYS_PATH}"
-if [ ! -e /home/backuppc/.ssh ]; then
-    ln -sf "${SSH_KEYS_PATH}" /home/backuppc/.ssh
-fi
+# Files that live inside the image follow the (possibly remapped) backuppc user
+mkdir -p /var/run/BackupPC /run/nginx
+chown -R backuppc:backuppc /usr/local/BackupPC /www/cgi-bin/BackupPC /www/html/BackupPC /var/run/BackupPC
 
-if [ ! -f "${SSH_KEYS_PATH}/id_rsa" ]; then
-    log "Creating RSA SSH key"
-    su-exec backuppc ssh-keygen -q -t rsa -b 4096 -N '' -f "${SSH_KEYS_PATH}/id_rsa"
-fi
-if [ ! -f "${SSH_KEYS_PATH}/id_ed25519" ]; then
-    log "Creating ed25519 SSH key"
-    su-exec backuppc ssh-keygen -q -t ed25519 -o -a 100 -N '' -f "${SSH_KEYS_PATH}/id_ed25519"
-fi
+# Mounted volumes may be read-only or on filesystems that refuse chown (NFS, unRAID shares),
+# so nothing below is allowed to stop the container. Only top-level directories of the pool
+# are touched; recursively chowning a large pool would take forever.
+for dir in "${CONFIG_PATH}" "${DATA_PATH}" "${LOG_PATH}" /home/backuppc; do
+    mkdir -p "${dir}" 2>/dev/null || warn "cannot create ${dir}"
+    if [ -d "${dir}" ] && [ "$(stat -c '%u' "${dir}")" != "${USER_BACKUPPC}" ]; then
+        chown backuppc:backuppc "${dir}" 2>/dev/null || warn "cannot chown ${dir}; it is owned by uid $(stat -c '%u' "${dir}")"
+    fi
+done
 
 if [ -f "${CONFIG_PATH}/config.pl" ]; then
-    log "Existing configuration found in ${CONFIG_PATH}, upgrading in place"
+    log "Using existing configuration in ${CONFIG_PATH} (left unchanged)"
 else
-    log "No configuration found, generating defaults in ${CONFIG_PATH}"
+    log "No configuration found, writing defaults to ${CONFIG_PATH}"
+    cp -n /assets/conf-default/* "${CONFIG_PATH}/"
+    chown -R backuppc:backuppc "${CONFIG_PATH}"
 fi
-(
-    cd /assets/install
-    perl configure.pl \
-        --batch \
-        --config-dir "${CONFIG_PATH}" \
-        --cgi-dir /www/cgi-bin/BackupPC \
-        --data-dir "${DATA_PATH}" \
-        --hostname localhost \
-        --html-dir /www/html/BackupPC \
-        --html-dir-url /BackupPC \
-        --install-dir /usr/local/BackupPC \
-        --log-dir "${LOG_PATH}"
-)
-chown -R backuppc:backuppc "${CONFIG_PATH}"
 
-# The web UI always runs as the "backuppc" user, so make sure it is an admin
-sed -i "s/^\$Conf{CgiAdminUsers}\s*=\s*'[^']*'/\$Conf{CgiAdminUsers} = 'backuppc'/" "${CONFIG_PATH}/config.pl"
+if mkdir -p "${SSH_KEYS_PATH}" 2>/dev/null; then
+    if [ ! -L /home/backuppc/.ssh ] && [ "$(stat -c '%u' "${SSH_KEYS_PATH}")" != "${USER_BACKUPPC}" ]; then
+        chown -R backuppc:backuppc "${SSH_KEYS_PATH}" 2>/dev/null || warn "cannot chown ${SSH_KEYS_PATH}"
+    fi
+    chmod 700 "${SSH_KEYS_PATH}" 2>/dev/null || true
+    if [ ! -f "${SSH_KEYS_PATH}/id_rsa" ]; then
+        log "Creating RSA SSH key"
+        su-exec backuppc ssh-keygen -q -t rsa -b 4096 -N '' -f "${SSH_KEYS_PATH}/id_rsa" || warn "could not create RSA SSH key"
+    fi
+    if [ ! -f "${SSH_KEYS_PATH}/id_ed25519" ]; then
+        log "Creating ed25519 SSH key"
+        su-exec backuppc ssh-keygen -q -t ed25519 -o -a 100 -N '' -f "${SSH_KEYS_PATH}/id_ed25519" || warn "could not create ed25519 SSH key"
+    fi
+else
+    warn "cannot create ${SSH_KEYS_PATH}; skipping SSH key setup"
+fi
 
 # Optional HTTP basic auth (same variable names as the original image)
 rm -f /etc/nginx/backuppc-auth.conf /etc/nginx/backuppc.htpasswd
@@ -96,6 +96,6 @@ log "Starting BackupPC ${BACKUPPC_VERSION}"
 su-exec backuppc /usr/local/BackupPC/bin/BackupPC &
 
 # Exit (and let docker restart us) if any of the services dies
-wait -n
-log "A service exited, shutting down"
+wait -n || status=$?
+log "A service exited (status ${status:-0}), shutting down"
 exit 1
